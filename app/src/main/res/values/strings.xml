@@ -1,0 +1,47 @@
+<resources>
+    <string name="app_name">PDF阅读器</string>
+
+    <!-- 列表页 -->
+    <string name="list_title">PDF 阅读器</string>
+    <string name="list_add">添加 PDF</string>
+    <string name="list_sort">排序</string>
+    <string name="list_search_hint">搜索 PDF 文件</string>
+    <string name="list_empty_title">还没有 PDF 文件</string>
+    <string name="list_empty_text">点击右上角 + 添加</string>
+    <string name="list_search_empty_text">没有匹配「%1$s」的文件</string>
+    <string name="list_progress">%1$d/%2$d</string>
+    <string name="list_progress_unknown">—/—</string>
+    <string name="list_broken">文件已失效</string>
+    <string name="list_sort_time">时间</string>
+    <string name="list_sort_name">名称</string>
+    <string name="list_sort_size">大小</string>
+    <string name="list_sort_asc">升序</string>
+    <string name="list_sort_desc">降序</string>
+
+    <!-- 多选模式 -->
+    <string name="selection_exit">退出多选</string>
+    <string name="selection_count">已选 %1$d 项</string>
+    <string name="selection_select_all">全选</string>
+    <string name="selection_delete">删除</string>
+    <string name="selection_delete_records">删除记录</string>
+    <string name="selection_delete_files">删除文件</string>
+    <string name="selection_confirm_delete_records">删除 %1$d 条阅读记录？文件本身不会被删除。</string>
+    <string name="selection_confirm_delete_files">删除 %1$d 个文件及其记录？该操作将删除存储位置的文件，不可撤销。</string>
+    <string name="selection_confirm">确定</string>
+    <string name="selection_cancel">取消</string>
+    <string name="snackbar_records_deleted">已删除 %1$d 条记录</string>
+    <string name="snackbar_files_deleted">已删除 %1$d 个文件</string>
+    <string name="snackbar_files_delete_failed">%1$d 个文件删除失败，已标记失效</string>
+    <string name="snackbar_import_result">已添加 %1$d 个，跳过 %2$d 个</string>
+
+    <!-- 阅读页 -->
+    <string name="reader_back">返回</string>
+    <string name="reader_toc">目录</string>
+    <string name="reader_toc_empty">该 PDF 没有目录</string>
+    <string name="reader_prev">上一页</string>
+    <string name="reader_next">下一页</string>
+    <string name="reader_load_failed">PDF 加载失败</string>
+    <string name="reader_load_failed_text">文件可能已被移动或删除</string>
+    <string name="reader_relocate">重新定位文件</string>
+    <string name="reader_remove_record">移除记录</string>
+</resources>
