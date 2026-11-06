@@ -56,7 +56,8 @@ app/src/main/java/com/xld/pdfreader/
     ├── reader/
     │   ├── PdfReaderScreen.kt   # TopBar/底栏/Drawer/失效文件处理
     │   ├── PdfReaderViewModel.kt# 进度防抖 500ms 写库，ioScope 兜底保存
-    │   ├── PdfViewer.kt         # AndroidView 包装 PDFView
+    │   ├── PdfViewer.kt         # AndroidView 包装 PDFView（视口 = 当前页比例）
+    │   ├── PageClampedPdfView.kt# PDFView 子类：纵向滚动偏移钳制在当前页内
     │   └── TocDrawer.kt
     └── theme/                   # 模板主题文件
 ```
@@ -93,10 +94,16 @@ Room 表 `pdf_documents`：
 **阅读页**（README「PDF阅读界面」细化）
 
 - 只读渲染 PDF 已有内容（含批注），不做编辑标注
-- PDFView 用 `AndroidView` 包装；**单页阅读模式**：`Constants.PRELOAD_OFFSET = 0` 只渲染当前页（不向可见区外扩展），`enableSwipe(false)` 禁用手势翻页，双指缩放/双击缩放/缩放后拖动平移仍可用
+- PDFView 用 `AndroidView` 包装；**单页阅读模式**（视口恰好等于一页，不能只靠 PRELOAD_OFFSET）：
+  - 外层 `BoxWithConstraints` 按**当前页宽高比**（`PDFView.getPageSize(page)` 的 width/height）把 AndroidView 约束成阅读区内最大的同比例矩形并居中 + `clipToBounds()`，相邻页被视口边界裁掉——这是「只显示完整一页」的关键
+  - 库默认 `FitPolicy.WIDTH` + `fitEachPage=false` 会让页面统一按最宽页缩放、页面高度可能小于视口高度，从而在上下露出相邻页残影
+  - `Configurator` 需 `.fitEachPage(true)`（每页独立适配视口宽度，混合尺寸 PDF 也完整）+ `.spacing(1)`（1dp 间距，吸收 fitWidth 向下取整的 1px 误差）
+  - `Constants.PRELOAD_OFFSET = 0` 只渲染与视口相交的页（此时即当前页），不向可见区外扩展；`enableSwipe(false)` 禁用手势翻页，双指缩放/双击缩放/缩放后拖动平移仍可用
+  - **`PageClampedPdfView` 必须钳制滚动偏移**：视口裁剪只隐藏视口外内容，库的滚动范围仍按整个文档（`moveTo` 只受 `docLen` 限制），缩放后拖动会滚到相邻页并触发其渲染。子类重写 `moveTo(float,float,boolean)`，把 Y 限制在 `[-pageTop, -(pageTop + pageHeight - viewHeight)]`；页顶偏移按 `Σ(前 i 页高度 + spacingPx) * zoom` 计算（与 `PdfFile.pageOffsets` 同源），并缓存、在 `onSizeChanged`（super 之前）失效；`jumpTo` 期间放行钳制
+  - 视口尺寸变化（首次拿到页比例 / 翻到不同比例页 / 横竖屏）后，用 `addOnLayoutChangeListener` + `jumpTo(currentPage, false)` 重新对齐页首；页比例在每次 `onPageChange` 更新（钳制后缩放平移不会跨页，只会在显式翻页时触发）
 - **`PdfViewer` 只要在 `doc` 就绪后就组合，不能等 `loadState == LOADED`**——LOADED 依赖 PdfViewer 的 `onLoad` 回调，先等后组合会死锁停在 loading；loading 态在其上叠加进度遮罩，relocate 换绑用 `key(uri)` 重建 AndroidView
 - `onPageChange` 更新 StateFlow 并防抖 500ms 写库（currentPage + lastOpenedAt）；`onLoad` 回填 pageCount 并读取 `tableOfContents`
-- 库本身就是按需渲染（分块 + 缓存），配 `PRELOAD_OFFSET = 0` 后只渲染可见页
+- 库本身就是按需渲染（分块 + 缓存），视口 = 单页 + `PRELOAD_OFFSET = 0` 后只渲染当前页；翻页 `jumpTo(page, withAnimation = false)` 立即跳转，不做滚动动画（动画会滚过并渲染中间页）
 - 目录用 `ModalNavigationDrawer` + `TocDrawer`（**`Surface` 实现**，非 `ModalDrawerSheet`；尺寸与 m3 一致 min 240.dp / max `DrawerDefaults.MaximumDrawerWidth`，内部 `windowInsetsPadding(statusBars/navigationBars)` 避免内容被系统栏遮盖，`LazyColumn` 用 `weight(1f)` 占满剩余高度）；`gesturesEnabled = drawerState.isOpen`——m3 源码中 scrim（空白处）点击收起受 `gesturesEnabled` 控制，故打开时启用（点击空白处/边缘滑动均可收起），关闭时禁用（避免边缘滑动与 PDF 手势冲突），点击目录项 `jumpTo(page)`
 - 底栏上一页/下一页按钮是**唯一翻页入口**（`requestJump` → `jumpTo`）+ `当前页/总页`，首末页禁用对应按钮
 
