@@ -61,8 +61,8 @@ app/src/main/java/com/xld/pdfreader/
     ├── reader/
     │   ├── PdfReaderScreen.kt   # TopBar/底栏/Drawer/失效文件处理
     │   ├── PdfReaderViewModel.kt# 进度防抖 500ms 写库，ioScope 兜底保存
-    │   ├── PdfViewer.kt         # AndroidView 包装 PDFView（视口 = 当前页比例）
-    │   ├── PageClampedPdfView.kt# PDFView 子类：纵向滚动偏移钳制在当前页内
+    │   ├── PdfViewer.kt         # AndroidView 包装 PDFView（视口 = 顶栏与底栏间整个阅读区）
+    │   ├── PageClampedPdfView.kt# PDFView 子类：onDraw 裁剪只画当前页 + 滚动偏移钳制在当前页内
     │   └── TocDrawer.kt
     └── theme/                   # 模板主题文件
 ```
@@ -99,16 +99,17 @@ Room 表 `pdf_documents`：
 **阅读页**（README「PDF阅读界面」细化）
 
 - 只读渲染 PDF 已有内容（含批注），不做编辑标注
-- PDFView 用 `AndroidView` 包装；**单页阅读模式**（视口恰好等于一页，不能只靠 PRELOAD_OFFSET）：
-  - 外层 `BoxWithConstraints` 按**当前页宽高比**（`PDFView.getPageSize(page)` 的 width/height）把 AndroidView 约束成阅读区内最大的同比例矩形并居中 + `clipToBounds()`，相邻页被视口边界裁掉——这是「只显示完整一页」的关键
-  - 库默认 `FitPolicy.WIDTH` + `fitEachPage=false` 会让页面统一按最宽页缩放、页面高度可能小于视口高度，从而在上下露出相邻页残影
-  - `Configurator` 需 `.fitEachPage(true)`（每页独立适配视口宽度，混合尺寸 PDF 也完整）+ `.spacing(1)`（1dp 间距，吸收 fitWidth 向下取整的 1px 误差）
-  - `Constants.PRELOAD_OFFSET = 0` 只渲染与视口相交的页（此时即当前页），不向可见区外扩展；`enableSwipe(false)` 禁用手势翻页，双指缩放/双击缩放/缩放后拖动平移仍可用
-  - **`PageClampedPdfView` 必须钳制滚动偏移**：视口裁剪只隐藏视口外内容，库的滚动范围仍按整个文档（`moveTo` 只受 `docLen` 限制），缩放后拖动会滚到相邻页并触发其渲染。子类重写 `moveTo(float,float,boolean)`，把 Y 限制在 `[-pageTop, -(pageTop + pageHeight - viewHeight)]`；页顶偏移按 `Σ(前 i 页高度 + spacingPx) * zoom` 计算（与 `PdfFile.pageOffsets` 同源），并缓存、在 `onSizeChanged`（super 之前）失效；`jumpTo` 期间放行钳制
-  - 视口尺寸变化（首次拿到页比例 / 翻到不同比例页 / 横竖屏）后，用 `addOnLayoutChangeListener` + `jumpTo(currentPage, false)` 重新对齐页首；页比例在每次 `onPageChange` 更新（钳制后缩放平移不会跨页，只会在显式翻页时触发）
+- PDFView 用 `AndroidView` 包装；**视口 = 顶栏与底栏之间的整个阅读区**（初始与缩放后都是），只显示当前页：
+  - `AndroidView` 直接 `fillMaxSize()` + `clipToBounds()`——可视范围始终是整个阅读区，缩放内容被裁剪在阅读区内；内容 Box 用 `padding(innerPadding)` 对齐顶/底栏（不能再叠加 `safeDrawingPadding`，TopAppBar/底栏已含系统栏 inset）
+  - 「只显示当前页」由 `PageClampedPdfView.onDraw` 实现：按 `页顶屏幕Y = pageTops[page]*zoom + currentYOffset`（与库 `drawPart`/`onDraw` 坐标同源）上下各留半个 `spacingPx` 做 `canvas.clipRect` 后再调 `super.onDraw`——相邻页即使被库渲染也不会画出，页外透明露出主题背景；每帧现算，无遮挡条联动
+  - `Configurator` 需 `.fitEachPage(true)`（每页独立适配阅读区宽度，混合尺寸 PDF 也完整）+ `.spacing(1)`（1dp 间距，吸收 fitWidth 向下取整的 1px 误差）
+  - `Constants.PRELOAD_OFFSET = 0` 只渲染与阅读区相交的页，不向可见区外扩展；`enableSwipe(false)` 禁用手势翻页，双指缩放/双击缩放/缩放后拖动平移仍可用
+  - **`PageClampedPdfView` 必须钳制滚动偏移**，且要保证**视口中心恒在当前页内**：库的 `DragPinchManager.onScroll` 每次拖动都调 `loadPageByOffset()`，它按视口中心所在页判定 `currentPage`，中心落到页外会误翻页。子类重写 `moveTo(float,float,boolean)` 分两种情况：页高 ≥ 视口高时 Y 限制在 `[-pageTop, -(pageTop + pageHeight - viewHeight)]`（视口 ⊆ 页）；页高 < 视口高时取「页完整在视口内 且 视口中心在页内」的交集（恒非空）。页顶偏移按 `Σ(前 i 页高度 + spacingPx) * zoom` 计算（与 `PdfFile.pageOffsets` 同源），并缓存、在 `onSizeChanged`（super 之前）失效；`jumpTo` 期间放行钳制
+  - **`jumpTo` 后需居中**：库的 `jumpTo` 是页顶对齐视口顶，页矮于视口时子类在跳完后补一次 `moveTo` 到垂直居中（既保持居中观感，也保证视口中心在本页内）；页 ≥ 视口高时维持顶对齐（从页首显示）
+  - 视口尺寸变化（横竖屏等）后，用 `addOnLayoutChangeListener` + `jumpTo(currentPage, false)` 重新对齐（同时触发居中校正）
 - **`PdfViewer` 只要在 `doc` 就绪后就组合，不能等 `loadState == LOADED`**——LOADED 依赖 PdfViewer 的 `onLoad` 回调，先等后组合会死锁停在 loading；loading 态在其上叠加进度遮罩，relocate 换绑用 `key(uri)` 重建 AndroidView
 - `onPageChange` 更新 StateFlow 并防抖 500ms 写库（currentPage + lastOpenedAt）；`onLoad` 回填 pageCount 并读取 `tableOfContents`
-- 库本身就是按需渲染（分块 + 缓存），视口 = 单页 + `PRELOAD_OFFSET = 0` 后只渲染当前页；翻页 `jumpTo(page, withAnimation = false)` 立即跳转，不做滚动动画（动画会滚过并渲染中间页）
+- 库本身就是按需渲染（分块 + 缓存），`PRELOAD_OFFSET = 0` 只渲染与阅读区相交的页（相邻页可能被渲染但被 `onDraw` 裁剪、不可见）；翻页 `jumpTo(page, withAnimation = false)` 立即跳转，不做滚动动画（动画会滚过并渲染中间页）
 - 目录用 `ModalNavigationDrawer` + `TocDrawer`（**`Surface` 实现**，非 `ModalDrawerSheet`；尺寸与 m3 一致 min 240.dp / max `DrawerDefaults.MaximumDrawerWidth`，内部 `windowInsetsPadding(statusBars/navigationBars)` 避免内容被系统栏遮盖，`LazyColumn` 用 `weight(1f)` 占满剩余高度）；`gesturesEnabled = drawerState.isOpen`——m3 源码中 scrim（空白处）点击收起受 `gesturesEnabled` 控制，故打开时启用（点击空白处/边缘滑动均可收起），关闭时禁用（避免边缘滑动与 PDF 手势冲突），点击目录项 `jumpTo(page)`
 - 底栏上一页/下一页按钮是**唯一翻页入口**（`requestJump` → `jumpTo`）+ `当前页/总页`，首末页禁用对应按钮
 
@@ -116,7 +117,7 @@ Room 表 `pdf_documents`：
 
 - 打开 App 只检查一次（`UpdateViewModel.checkOnStart()`，每次会话一次）：请求 `https://api.github.com/repos/xiaolidan00/PDFReaderApp/releases/latest`，`tag_name` 归一化（去 `v` 前缀、只取数字段）后与本地 `versionName` 数值比较，**必须更新且 assets 里有 `.apk` 资源**才弹窗；网络失败/无新版/无 APK 一律静默跳过
 - 弹窗展示新版本号 + Release 正文（空则显示占位文案）；「稍后」/下载中「取消下载」把该版本写入 SharedPreferences `app_update.ignored_version`，此后不再提示，只有更高版本才再弹
-- 确认升级 → `DownloadManager` 下载到 `getExternalFilesDir(DIRECTORY_DOWNLOADS)`（系统通知栏同步显示进度），ViewModel 每 500ms 轮询 `COLUMN_STATUS`/`COLUMN_BYTES_DOWNLOADED_SO_FAR` 驱动 App 内进度弹窗；「后台下载」只收起弹窗，下载与完成后自动安装不受影响
+- 确认升级 → **先查本地**：`getExternalFilesDir(DIRECTORY_DOWNLOADS)` 下已有 `PDFReader-<版本>.apk` 且大小等于 Release asset `size`（`AppUpdate.apkSize`，`UpdateChecker` 解析）→ 跳过下载直接安装；文件缺失或大小不符（上次中断的残缺文件，查到即删除）才入队 `DownloadManager` 下载（系统通知栏同步显示进度），ViewModel 每 500ms 轮询 `COLUMN_STATUS`/`COLUMN_BYTES_DOWNLOADED_SO_FAR` 驱动 App 内进度弹窗；「后台下载」只收起弹窗，下载与完成后自动安装不受影响
 - 下载完成 → `FileProvider`（authority `${applicationId}.fileprovider`，路径 `res/xml/file_paths.xml`）生成 content URI 拉起系统安装页；无「安装未知应用」权限时先跳 `ACTION_MANAGE_UNKNOWN_APP_SOURCES`，activity result 回流后重试安装
 - 发版流程见 README「版本发布流程」：`versionName` 递增 + tag `vX.Y` + Release 必须带 `.apk` asset，新旧 APK 签名必须一致
 
@@ -126,7 +127,7 @@ Room 表 `pdf_documents`：
   - 包名是 `com.github.barteksc.pdfviewer`（**不是**原库的 `...androidpdfviewer`）
   - 构造函数只有 `(Context, AttributeSet)` 两参数版本：`PDFView(context, null)`
   - 缩放/滑动/抗锯齿等配置在 `fromUri(...)` 的 **Configurator 链**上，不在 PDFView 直接调用
-  - `Constants.PRELOAD_OFFSET`（`com.github.barteksc.pdfviewer.util.Constants`，可变 `public static int`，单位 dp）控制渲染范围向可见区外扩展量，设 0 = 只渲染当前页；**必须在 `PDFView(context, null)` 构造之前设置**——`PagesLoader` 在 PDFView 构造函数里实例化并读取该值
+  - `Constants.PRELOAD_OFFSET`（`com.github.barteksc.pdfviewer.util.Constants`，可变 `public static int`，单位 dp）控制渲染范围向可见区外扩展量，设 0 = 只渲染与阅读区相交的页（相邻页相交部分仍会渲染，但被 `PageClampedPdfView.onDraw` 裁剪、不可见）；**必须在 `PDFView(context, null)` 构造之前设置**——`PagesLoader` 在 PDFView 构造函数里实例化并读取该值
   - `enableSwipe(false)` 后库内 `onFling` 直接 return 不翻页；`onScroll` 仅在 `isZooming || isSwipeEnabled` 时移动内容，即未缩放时拖动无效、缩放态拖动即平移；`jumpTo` 程序化跳页不受影响
   - 目录（TOC）类型是 `com.shockwave.pdfium.PdfDocument.Bookmark`（pdfium 传递依赖），字段走 `title`/`pageIdx`(Long, 0-based)/`children` getter；`tableOfContents` 仅在 `onLoad` 回调后可用
   - **批注渲染默认关闭**，必须 `pdfView.enableAnnotationRendering(true)` 才渲染 PDF 内已有高亮/荧光笔批注

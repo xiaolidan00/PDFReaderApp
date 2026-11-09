@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -137,9 +136,11 @@ fun PdfReaderScreen(
             }
         ) { innerPadding ->
             Box(
+                // innerPadding = 顶栏与底栏（含各自系统栏 inset）之外的阅读区；
+                // 不能再叠加 safeDrawingPadding，否则状态栏/导航栏区域会重复留白
                 modifier = Modifier
                     .fillMaxSize()
-                    .safeDrawingPadding(),
+                    .padding(innerPadding),
             ) {
                 when (state.loadState) {
                     ReaderUiState.LoadState.FAILED -> {
