@@ -50,3 +50,21 @@ PDF阅读内容区
 ——
 上一页   进度（当前页数/总页数） 下一页
 ```
+
+## 应用内更新（自动升级）
+
+- 打开 App 时检查一次 GitHub Release（`releases/latest`），存在比当前 `versionName` 更新的版本且 Release 带 `.apk` 资源时，弹窗提示升级
+- 升级弹窗展示新版本号与新版本描述（Release 正文）；点「稍后」或下载中点「取消下载」会记住该版本，之后不再提示
+- 点「立即升级」后由系统 `DownloadManager` 后台下载 APK（App 内显示进度弹窗，也可点「后台下载」收起弹窗），下载完成自动拉起系统安装页
+- Android 8+ 首次升级会跳转「允许安装未知应用」设置页，授权返回后自动继续安装
+
+## 版本发布流程
+
+发版前确认 GitHub 仓库为 `xiaolidan00/PDFReaderApp`（检查地址硬编码在 `update/UpdateChecker.kt`）。
+
+1. 修改 `app/build.gradle.kts`：递增 `versionCode`，`versionName` 改为新版本号（如 `1.1`），必须比线上版本新，否则不会提示升级
+2. 构建 release APK：`.\gradlew.bat :app:assembleRelease`（需在 `build.gradle.kts` 配置 `signingConfig`；升级安装要求新旧 APK 签名一致，建议配置正式签名）
+3. 打 tag 并推送：`git tag v1.1 && git push origin v1.1`（tag 必须以 `v` + 数字开头，如 `v1.1`）
+4. 在 GitHub 仓库 **Releases** 页面创建该 tag 的 Release：
+   - 标题/正文：正文会显示在升级弹窗的「新版本描述」里
+   - **必须上传 APK 作为 asset**（文件名以 `.apk` 结尾），否则 App 检查到新版也无法升级，会静默跳过

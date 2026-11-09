@@ -27,7 +27,7 @@ Android PDF 阅读器（只查看，不编辑）。列表页与阅读页功能�
 ./gradlew :app:assembleDebug
 ```
 
-无测试套件，`assembleDebug` 是唯一验证方式。
+无测试套件（版本比较逻辑有单元测试 `:app:testDebugUnitTest`），`assembleDebug` 是主要验证方式。
 
 ## 执行流程
 
@@ -40,15 +40,20 @@ Android PDF 阅读器（只查看，不编辑）。列表页与阅读页功能�
 
 ```
 app/src/main/java/com/xld/pdfreader/
-├── MainActivity.kt              # setContent { PDFReaderTheme { AppNavGraph() } }
+├── MainActivity.kt              # setContent { PDFReaderTheme { AppNavGraph(); UpdateHost() } }
 ├── PDFApplication.kt            # Application + AppContainer（手动 DI）+ Context.appContainer 扩展
 ├── data/
 │   ├── PdfDocumentEntity.kt     # Room 实体
 │   ├── PdfDocumentDao.kt
 │   ├── AppDatabase.kt           # 单例 databaseBuilder
 │   └── PdfRepository.kt         # SAF 导入/删除/换绑 + Room 封装
+├── update/                      # 应用内升级
+│   ├── UpdateChecker.kt         # GitHub Releases API 检查 + 版本号归一化/比较
+│   ├── ApkInstaller.kt          # FileProvider 安装 intent + 「安装未知应用」授权跳转
+│   └── UpdateViewModel.kt       # 升级状态机：检查/弹窗/DownloadManager 进度/安装
 └── ui/
     ├── navigation/AppNavGraph.kt
+    ├── update/UpdateHost.kt     # 启动检查 + 升级弹窗/下载进度弹窗（全局叠加）
     ├── list/
     │   ├── PdfListScreen.kt     # 搜索/排序菜单/多选/确认弹窗/Snackbar
     │   ├── PdfListViewModel.kt  # 过滤排序在内存完成，query debounce 300ms
@@ -107,6 +112,14 @@ Room 表 `pdf_documents`：
 - 目录用 `ModalNavigationDrawer` + `TocDrawer`（**`Surface` 实现**，非 `ModalDrawerSheet`；尺寸与 m3 一致 min 240.dp / max `DrawerDefaults.MaximumDrawerWidth`，内部 `windowInsetsPadding(statusBars/navigationBars)` 避免内容被系统栏遮盖，`LazyColumn` 用 `weight(1f)` 占满剩余高度）；`gesturesEnabled = drawerState.isOpen`——m3 源码中 scrim（空白处）点击收起受 `gesturesEnabled` 控制，故打开时启用（点击空白处/边缘滑动均可收起），关闭时禁用（避免边缘滑动与 PDF 手势冲突），点击目录项 `jumpTo(page)`
 - 底栏上一页/下一页按钮是**唯一翻页入口**（`requestJump` → `jumpTo`）+ `当前页/总页`，首末页禁用对应按钮
 
+**应用内升级**（README「应用内更新」细化）
+
+- 打开 App 只检查一次（`UpdateViewModel.checkOnStart()`，每次会话一次）：请求 `https://api.github.com/repos/xiaolidan00/PDFReaderApp/releases/latest`，`tag_name` 归一化（去 `v` 前缀、只取数字段）后与本地 `versionName` 数值比较，**必须更新且 assets 里有 `.apk` 资源**才弹窗；网络失败/无新版/无 APK 一律静默跳过
+- 弹窗展示新版本号 + Release 正文（空则显示占位文案）；「稍后」/下载中「取消下载」把该版本写入 SharedPreferences `app_update.ignored_version`，此后不再提示，只有更高版本才再弹
+- 确认升级 → `DownloadManager` 下载到 `getExternalFilesDir(DIRECTORY_DOWNLOADS)`（系统通知栏同步显示进度），ViewModel 每 500ms 轮询 `COLUMN_STATUS`/`COLUMN_BYTES_DOWNLOADED_SO_FAR` 驱动 App 内进度弹窗；「后台下载」只收起弹窗，下载与完成后自动安装不受影响
+- 下载完成 → `FileProvider`（authority `${applicationId}.fileprovider`，路径 `res/xml/file_paths.xml`）生成 content URI 拉起系统安装页；无「安装未知应用」权限时先跳 `ACTION_MANAGE_UNKNOWN_APP_SOURCES`，activity result 回流后重试安装
+- 发版流程见 README「版本发布流程」：`versionName` 递增 + tag `vX.Y` + Release 必须带 `.apk` asset，新旧 APK 签名必须一致
+
 ## 注意事项
 
 - **PDF 引擎坐标是 `com.github.mhiew:android-pdf-viewer:3.2.0-beta.3`**（barteksc 原库已随 jcenter 死亡，此为 Maven Central 上的维护分支，无需 JitPack）。API 细节：
@@ -123,4 +136,5 @@ Room 表 `pdf_documents`：
 - 翻页写库必须防抖（约 500ms），避免每次翻页都写数据库；返回键路径用 `ioScope` 立即落库（不随 VM 销毁取消）
 - 删除文件需系统确认；批量删除失败的条目保留记录并标记 `isBroken`
 - 字符串资源中文化；`compileSdk` 使用 AGP 9 新 DSL（`compileSdk { version = release(36) }`）
+- 升级相关：`INTERNET` + `REQUEST_INSTALL_PACKAGES` 权限、FileProvider 声明都在 `AndroidManifest.xml`，`file_paths.xml` 只有 `external-files-path path="Download/"`（与 DownloadManager 目录严格对应，改下载目录必须同步改它）；DownloadManager 字段名是 `COLUMN_BYTES_DOWNLOADED_SO_FAR`（**不是** `..._SO_FUTURE`，后者非公开 API）；升级检查地址硬编码在 `UpdateChecker.RELEASES_URL`，仓库改名/迁移要同步更新
 - **待真机/模拟器验证**：pdfium 原生 `.so`（libjniPdfium/libmodpdfium 等）的 16KB 页尺寸对齐；`assembleDebug` 无法覆盖此风险，首次安装到 Android 15+/16KB 页设备时需重点验证
